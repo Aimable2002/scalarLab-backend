@@ -6,7 +6,7 @@ Build a vertical slice first. Keep each phase testable before expanding scope.
 
 - Inspect the existing repository, frontend routes, TypeScript types, mock services, auth assumptions, and current backend code if any.
 - Identify actual API expectations and distinguish implemented UI from mock-only functionality.
-- Confirm Python version, dependency manager, deployment target, authentication approach, database, queue, and managed object storage provider.
+- Confirm Python version, dependency manager, deployment target, and Modal account/function capabilities. V1 selects Supabase Auth and Database, Celery with Redis, S3-compatible object storage, and Modal as its first GPU provider.
 - Document unresolved choices; do not silently guess.
 - Produce a repository-specific implementation plan before large code changes.
 
@@ -15,30 +15,33 @@ Build a vertical slice first. Keep each phase testable before expanding scope.
 ## Phase 1 — Backend foundation
 
 - FastAPI app/configuration, health/readiness endpoints, structured logging and request IDs.
-- PostgreSQL connection, migrations, repository/service conventions.
+- Supabase Database connection, migrations, repository/service conventions. The Supabase database is PostgreSQL-compatible; use its project connection string and keep credentials server-side.
+- Supabase Auth token verification for API identity.
 - Workspace/resource authorization boundary.
 - Error schema, settings validation, test setup, local development instructions.
-- Queue and storage interfaces with configuration-driven adapters.
+- Celery/Redis queue and S3-compatible storage interfaces with configuration-driven adapters.
 
 **Acceptance:** service starts reliably, migrations run, tests run, secrets are not committed, and health/readiness accurately reflect required dependencies.
 
 ## Phase 2 — Artifact and registry foundation
 
-- Managed object storage adapter.
-- Authorized temporary upload/download, upload finalization, checksums and artifact metadata.
-- Dataset/model registries with immutable versions.
+- S3-compatible managed object storage adapter.
+- Authorized temporary upload/download for final model weights and other platform-generated artifacts, upload finalization, checksums and artifact metadata.
+- Dataset/model registries with immutable versions; V1 dataset versions are external provider references and metadata, not uploaded dataset files.
 - Workspace access checks and retention metadata.
-- Tests for unauthorized access, invalid uploads, missing objects, and incomplete uploads.
+- Tests for unauthorized dataset references/artifact access, provider-reference validation, invalid model artifact uploads, missing objects, and incomplete uploads.
 
-**Acceptance:** a user can register a dataset and model version, upload a file, verify it, and retrieve it only with authorized access.
+**Acceptance:** a user can register an externally hosted dataset version without uploading its bytes to platform storage, register a model, and upload/verify a trained model artifact that is retrievable only with authorized access.
 
 ## Phase 3 — Asynchronous job lifecycle
 
-- Queue adapter and worker process.
+- Celery/Redis queue adapter and worker process.
 - Job and attempt state machines.
 - Progress updates, heartbeat, log capture/reference, cancellation, safe retry rules.
-- Provider-neutral compute request/result contract and at least one concrete provider adapter only after selecting and verifying the provider.
-- Worker scratch-space cleanup and artifact upload.
+- Provider-neutral compute request/result contract and the selected Modal provider adapter; verify deployed function capabilities before enabling job submission.
+- Download external datasets into temporary GPU-worker storage; clean scratch data on success, failure, and cancellation. Upload and verify required final model artifacts before GPU release.
+
+V1 implementation supports the pinned Hugging Face dataset path. Kaggle remains registrable metadata only until its immutable revision-download capability is verified.
 
 **Acceptance:** an integration test submits a job, observes status/progress/logs, cancels a supported running job, and retrieves the resulting artifacts. Failure/retry behavior is tested.
 
@@ -57,7 +60,7 @@ Build a vertical slice first. Keep each phase testable before expanding scope.
 - Verify applicable Dukascopy API/library, licensing, usage terms, data granularity, historical limits, and any live-data capability required.
 - Implement environment registry and adapter.
 - Normalize instrument metadata, timestamps, bars/ticks, and quality checks.
-- Store raw/normalized files durably with version/lineage metadata.
+- For job-bound V1 datasets, retain provider references and version/lineage metadata; download to temporary GPU-worker storage and do not persist dataset copies in platform object storage. Persist platform-generated outputs only when required and permitted.
 - Do not add broker execution unless separately verified and explicitly scoped.
 
 **Acceptance:** an integration test ingests a bounded historical dataset, reports data quality, and reproduces the same normalized output from the same source/version/configuration.

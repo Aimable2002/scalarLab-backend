@@ -71,11 +71,13 @@ Keep the first implementation modular and testable. Separate deployable services
 - Support externally hosted models without copying their weights automatically; cache/copy only when policy, licensing, and use case allow.
 
 ### Dataset registry
-- Dataset source, version, schema, size, format, checksum, license/permission metadata, validation status, and artifact references.
-- Preserve immutable dataset versions and record transformations as derived datasets with lineage.
+- Dataset provider/source identifier, immutable version or revision, schema, size/format when known, checksum where available, license/permission metadata, and validation status.
+- In V1, datasets hosted by Kaggle, Hugging Face, or another supported external provider remain there. Store their references and metadata, not their file bytes or a platform object-storage artifact reference.
+- The initial Modal Forex baseline executes only against pinned Hugging Face revisions; registering a Kaggle reference does not imply that its revision can currently be fetched reproducibly.
+- Preserve immutable dataset references and record transformations/derived datasets with lineage. Job workers download referenced data to temporary GPU-worker storage and remove it after the job.
 
 ### Artifact service and storage adapter
-- Managed object storage integration, private-by-default objects, generated object keys, checksums, multipart upload where needed, temporary authorized URLs, artifact ownership, and retention.
+- S3-compatible object storage integration for final trained model weights and other platform-generated durable artifacts, private-by-default objects, generated object keys, checksums, multipart upload where needed, temporary authorized URLs, artifact ownership, and retention. V1 user dataset files are not uploaded to this storage.
 - Define an interface so the provider can change without rewriting modules.
 
 Suggested logical methods:
@@ -90,19 +92,20 @@ This is illustrative, not a requirement to use these exact signatures.
 
 ### Job and queue system
 - Job records, attempts, progress, status, heartbeat, logs, cancellation request, retries, and result references.
-- Use a queue technology suitable for durable long-running workloads. Select it explicitly after considering operational complexity. FastAPI `BackgroundTasks` alone is not the job system for GPU training.
+- Use Celery workers with Redis-backed dispatch for long-running workloads. Supabase Database remains the system of record for job/attempt state; FastAPI `BackgroundTasks` is not the job system for GPU training.
 - Suggested states: `queued`, `provisioning`, `running`, `cancel_requested`, `succeeded`, `failed`, `cancelled`, `timed_out`, `lost`.
 - Validate state transitions; retries create/record attempts instead of erasing history.
 
 ### Compute router
 - Common compute request and result contracts, capability requirements, provider selection policy, provider health, usage/cost metadata when available, and provider job identifiers.
+- Modal is the first V1 provider adapter. It submits to a deployed Modal function and exposes call status, logs, and cancellation; GPU type and image are configured by that deployed function.
 - Provider adapters implement provision/submit, status, logs if available, cancellation if supported, and cleanup.
 - A provider's unsupported capability must be visible in the result; never promise uniform features that all providers do not support.
 
 ### Method engine
 - Pluggable handlers for training, fine-tuning, evaluation, data preparation, and other supported work.
 - Each method declares input schema, required compute capabilities, output artifacts, metrics, cancellation behavior, and reproducibility needs.
-- Begin with a narrow vertical slice; do not implement every method family as empty placeholders.
+- V1 starts with the Forex next-bar direction baseline defined in `PROJECT_BRIEF.md`; do not implement every method family as empty placeholders.
 
 ### Environment manager and adapters
 - Registry of environments, capabilities, schemas, data limits, and availability.
@@ -111,8 +114,8 @@ This is illustrative, not a requirement to use these exact signatures.
 - Track terms/licensing, rate limits, data granularity, and live-data limitations as configuration/documentation, not assumptions.
 
 ### Market-data pipeline
-- Ingest, normalize, validate, version, and store historical market data.
-- Store metadata and data lineage in PostgreSQL; store large files/partitions in object storage or a suitable time-series store if justified.
+- Fetch, normalize, and validate historical market data for the active job; preserve provider/version lineage in Supabase Database.
+- In V1, keep user dataset bytes with the external provider and use only temporary GPU-worker storage for downloaded/normalized job data. Durable object storage is reserved for generated outputs and artifacts.
 - Detect gaps, duplicates, timestamp/time-zone issues, malformed rows, and symbol/metadata mismatches.
 - Do not claim tick-level accuracy if only bars are available.
 
@@ -138,11 +141,11 @@ This is illustrative, not a requirement to use these exact signatures.
 
 ## 3. Storage contract
 
-- PostgreSQL is the system of record for metadata and relationships.
-- Managed object storage is the durable store for large files.
-- Workers use short-lived authorized downloads/uploads; never assume a shared disk across compute providers.
-- Registered datasets and final model artifacts are retained by default.
-- Intermediate checkpoints, temporary data, and verbose logs follow configurable retention policies.
+- Supabase Database (PostgreSQL) is the system of record for metadata and relationships.
+- S3-compatible object storage is the durable store for final trained model weights and other retained platform-generated files, not V1 externally hosted dataset files.
+- Workers retrieve a registered external dataset using the provider integration and job-scoped authorization, download it to temporary GPU-worker storage, and remove it after the job. Never assume a shared disk across compute providers.
+- Retain dataset references/metadata and final model artifacts by default. Do not retain copies of V1 external datasets in platform storage.
+- Intermediate checkpoints and verbose logs follow configurable retention policies; temporary dataset copies and other scratch data are cleaned up after completion, failure, or cancellation.
 - Retention deletion must not remove a file still referenced by a protected artifact/version or active job.
 - Use checksums and immutable versioned keys where feasible.
 - Build orphan detection/cleanup for uploaded objects that never become registered artifacts.
